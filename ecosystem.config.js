@@ -11,8 +11,8 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         LOG_LEVEL: 'INFO',
-        PORT: 3000
-        // WIZ_PASSWORD: 'set-me-to-enable-login'  // uncomment + set to require login
+        PORT: 3000,
+        // WIZ_PASSWORD: 'set-me-to-enable-login'   // uncomment + set to require login
       },
       error_file: './logs/error.log',
       out_file: './logs/out.log',
