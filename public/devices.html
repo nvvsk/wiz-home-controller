@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Management - WiZ Home Controller</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body class="bg-gray-50">
+  <!-- Header -->
+  <header class="bg-white shadow-sm border-b border-gray-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <i class="fas fa-cogs text-3xl text-blue-500"></i>
+          <div>
+            <h1 class="text-2xl font-bold text-gray-900">Device Management</h1>
+            <p class="text-sm text-gray-500">Manage your WiZ lights</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-4">
+          <div id="connectionStatus" class="flex items-center space-x-2">
+            <div class="w-3 h-3 rounded-full bg-gray-400"></div>
+            <span class="text-sm text-gray-600">Connecting...</span>
+          </div>
+          <a href="/" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
+            <i class="fas fa-home mr-2"></i>Dashboard
+          </a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm text-gray-600">Configured Devices</p>
+            <p class="text-3xl font-bold text-gray-900" id="configuredCount">0</p>
+          </div>
+          <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+            <i class="fas fa-check-circle text-2xl text-green-600"></i>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm text-gray-600">Discovered Devices</p>
+            <p class="text-3xl font-bold text-gray-900" id="discoveredCount">0</p>
+          </div>
+          <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+            <i class="fas fa-search text-2xl text-blue-600"></i>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm text-gray-600">Total Devices</p>
+            <p class="text-3xl font-bold text-gray-900" id="totalCount">0</p>
+          </div>
+          <div class="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+            <i class="fas fa-lightbulb text-2xl text-purple-600"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Discovered Devices Section -->
+    <section class="mb-8">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold text-gray-900">
+          <i class="fas fa-search text-blue-500 mr-2"></i>Discovered Devices
+        </h2>
+        <div class="flex space-x-2">
+          <button onclick="scanNetwork()" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition">
+            <i class="fas fa-radar mr-2"></i>Scan Network
+          </button>
+          <button onclick="clearDiscovered()" class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition">
+            <i class="fas fa-trash mr-2"></i>Clear All
+          </button>
+          <button onclick="addAllDiscovered()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+            <i class="fas fa-plus-circle mr-2"></i>Add All
+          </button>
+        </div>
+      </div>
+      
+      <div id="discoveredDevices" class="bg-white rounded-lg shadow overflow-hidden">
+        <!-- Discovered devices will be loaded here -->
+      </div>
+    </section>
+
+    <!-- Configured Devices Section -->
+    <section>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold text-gray-900">
+          <i class="fas fa-check-circle text-green-500 mr-2"></i>Configured Devices
+        </h2>
+      </div>
+      
+      <div id="configuredDevices" class="bg-white rounded-lg shadow overflow-hidden">
+        <!-- Configured devices will be loaded here -->
+      </div>
+    </section>
+  </main>
+
+  <script src="/devices.js"></script>
+</body>
+</html>

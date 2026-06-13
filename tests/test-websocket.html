@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiZ WebSocket Test</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    .status {
+      padding: 10px 15px;
+      border-radius: 5px;
+      margin: 20px 0;
+      font-weight: bold;
+    }
+    .connected {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .disconnected {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .log {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 15px;
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+    }
+    .log-entry {
+      padding: 5px;
+      margin: 5px 0;
+      border-left: 3px solid #007bff;
+      padding-left: 10px;
+    }
+    .log-entry.update {
+      border-left-color: #28a745;
+    }
+    .log-entry.command {
+      border-left-color: #ffc107;
+    }
+    .log-entry.error {
+      border-left-color: #dc3545;
+    }
+    .timestamp {
+      color: #6c757d;
+      font-size: 11px;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 5px;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    button:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔌 WiZ WebSocket Test Client</h1>
+    
+    <div id="status" class="status disconnected">
+      ⚠️ Disconnected
+    </div>
+
+    <div style="margin: 20px 0;">
+      <button onclick="connect()" id="connectBtn">Connect</button>
+      <button onclick="disconnect()" id="disconnectBtn" disabled>Disconnect</button>
+      <button onclick="enableSync()" id="enableSyncBtn" disabled>▶️ Enable syncPilot</button>
+      <button onclick="disableSync()" id="disableSyncBtn" disabled>⏸️ Disable syncPilot</button>
+      <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <h3>Event Log</h3>
+    <div id="log" class="log">
+      <div class="log-entry">Waiting for connection...</div>
+    </div>
+  </div>
+
+  <script>
+    let socket = null;
+    const serverUrl = 'http://localhost:3000';
+
+    function updateStatus(connected) {
+      const statusEl = document.getElementById('status');
+      const connectBtn = document.getElementById('connectBtn');
+      const disconnectBtn = document.getElementById('disconnectBtn');
+      const enableSyncBtn = document.getElementById('enableSyncBtn');
+      const disableSyncBtn = document.getElementById('disableSyncBtn');
+      
+      if (connected) {
+        statusEl.className = 'status connected';
+        statusEl.innerHTML = '✅ Connected to ' + serverUrl;
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+        enableSyncBtn.disabled = false;
+        disableSyncBtn.disabled = false;
+      } else {
+        statusEl.className = 'status disconnected';
+        statusEl.innerHTML = '⚠️ Disconnected';
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        enableSyncBtn.disabled = true;
+        disableSyncBtn.disabled = true;
+      }
+    }
+
+    function addLog(message, type = 'info') {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      
+      const timestamp = new Date().toLocaleTimeString('en-US', { 
+        hour12: false, 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        second: '2-digit',
+        fractionalSecondDigits: 3
+      });
+      
+      entry.innerHTML = `
+        <span class="timestamp">[${timestamp}]</span> ${message}
+      `;
+      
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function connect() {
+      if (socket) {
+        addLog('Already connected', 'error');
+        return;
+      }
+
+      addLog('Connecting to ' + serverUrl + '...');
+      socket = io(serverUrl);
+
+      socket.on('connect', () => {
+        updateStatus(true);
+        addLog('✅ Connected! Socket ID: ' + socket.id, 'info');
+      });
+
+      socket.on('connected', (data) => {
+        addLog('📨 Server message: ' + data.message, 'info');
+      });
+
+      socket.on('disconnect', () => {
+        updateStatus(false);
+        addLog('❌ Disconnected from server', 'error');
+        socket = null;
+      });
+
+      socket.on('light:update', (data) => {
+        const state = data.state ? 'ON' : 'OFF';
+        const brightness = data.brightness ? ` ${data.brightness}%` : '';
+        const temp = data.temperature ? ` ${data.temperature}K` : '';
+        const rgb = data.rgb ? ` RGB(${data.rgb.r},${data.rgb.g},${data.rgb.b})` : '';
+        
+        addLog(
+          `💡 <strong>${data.name}</strong> (${data.id}): ${state}${brightness}${temp}${rgb} | RSSI: ${data.rssi} | Source: ${data.source}`,
+          'update'
+        );
+      });
+
+      socket.on('light:command', (data) => {
+        addLog(`⚡ Command sent to ${data.id}: ${data.action}`, 'command');
+      });
+
+      socket.on('light:updated', (data) => {
+        addLog(`🔄 Light ${data.id} updated: ${JSON.stringify(data)}`, 'info');
+      });
+
+      socket.on('group:command', (data) => {
+        addLog(`👥 Group command: ${data.id} - ${data.action}`, 'command');
+      });
+
+      socket.on('group:created', (data) => {
+        addLog(`➕ Group created: ${data.name} (${data.id})`, 'info');
+      });
+
+      socket.on('group:deleted', (data) => {
+        addLog(`➖ Group deleted: ${data.id}`, 'info');
+      });
+
+      socket.on('light:synced', (data) => {
+        const state = data.status.state ? 'ON' : 'OFF';
+        const brightness = data.status.brightness ? ` ${data.status.brightness}%` : '';
+        const temp = data.status.temperature ? ` ${data.status.temperature}K` : '';
+        const rssi = data.status.rssi ? ` RSSI: ${data.status.rssi}` : '';
+        
+        addLog(
+          `🔄 <strong>${data.name}</strong> synced: ${state}${brightness}${temp}${rssi}`,
+          'info'
+        );
+      });
+
+      socket.on('error', (error) => {
+        addLog('❌ Error: ' + error, 'error');
+      });
+    }
+
+    async function enableSync() {
+      try {
+        addLog('▶️ Enabling syncPilot keep-alive for all lights...', 'command');
+        
+        const response = await fetch(serverUrl + '/api/lights/sync/enable', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          addLog(`✅ ${data.message}`, 'info');
+        } else {
+          addLog('❌ Failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+      } catch (error) {
+        addLog('❌ Error: ' + error.message, 'error');
+      }
+    }
+
+    async function disableSync() {
+      try {
+        addLog('⏸️ Disabling syncPilot keep-alive...', 'command');
+        
+        const response = await fetch(serverUrl + '/api/lights/sync/disable', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          addLog(`✅ ${data.message}`, 'info');
+        } else {
+          addLog('❌ Failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+      } catch (error) {
+        addLog('❌ Error: ' + error.message, 'error');
+      }
+    }
+
+    function disconnect() {
+      if (socket) {
+        socket.disconnect();
+        socket = null;
+        updateStatus(false);
+        addLog('Disconnected by user');
+      }
+    }
+
+    function clearLog() {
+      document.getElementById('log').innerHTML = '';
+    }
+
+    // Auto-connect on page load
+    window.addEventListener('load', () => {
+      setTimeout(connect, 500);
+    });
+  </script>
+</body>
+</html>

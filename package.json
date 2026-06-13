@@ -1,0 +1,38 @@
+{
+  "name": "wiz-home-controller",
+  "version": "0.1.0",
+  "description": "Philips WiZ light control system with REST API and automation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "build": "cd frontend && npm run build",
+    "prod": "npm run build && NODE_ENV=production node index.js",
+    "discover": "node discover.js",
+    "discover:save": "node discover.js --save",
+    "discover:subnet": "node discover.js subnet",
+    "test": "node tests/test-cli.js",
+    "test:push": "node tests/test-push.js",
+    "test:push:live": "node tests/test-push.js --keep-alive",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop wiz-controller",
+    "pm2:restart": "pm2 restart wiz-controller",
+    "pm2:logs": "pm2 logs wiz-controller",
+    "pm2:status": "pm2 status wiz-controller"
+  },
+  "keywords": [
+    "wiz",
+    "philips",
+    "smart-lights",
+    "home-automation",
+    "udp"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3",
+    "suncalc": "^1.9.0"
+  }
+}
