@@ -166,10 +166,18 @@ module.exports = (automationEngine, io) => {
       return res.status(400).json({ error: validationError });
     }
     try {
+      // Snapshot run state BEFORE the update — the in-memory event keeps its
+      // original endTime / isManual / enforce flags from when it started, so
+      // the new schedule won't apply until the user stops and re-runs.
+      const wasRunning = automationEngine.isAutomationRunning(req.params.id);
+
       const automation = automationEngine.updateAutomation(req.params.id, req.body);
 
       // Emit to WebSocket clients
       io.emit('automation:updated', automation);
+      if (wasRunning) {
+        io.emit('automation:edited-while-running', { id: automation.id, name: automation.name });
+      }
 
       res.json(automation);
     } catch (error) {

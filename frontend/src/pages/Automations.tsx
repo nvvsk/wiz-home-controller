@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Clock, Plus, Edit2, Trash2, Power, Play, Square, Loader2, Sun, Calendar } from 'lucide-react'
 import Header from '../components/Header'
 import AutomationModal from '../components/AutomationModal'
+import Toast from '../components/Toast'
 import { useSocket } from '../services/socket'
 
 interface AutomationStep {
@@ -77,6 +78,7 @@ export default function Automations() {
   const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null)
   const [groups, setGroups] = useState<string[]>([])
   const [lights, setLights] = useState<string[]>([])
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning'; action?: { label: string; onClick: () => void } } | null>(null)
 
   useEffect(() => {
     fetchAutomations()
@@ -92,8 +94,25 @@ export default function Automations() {
     const onStateChange = (data: { id: string; active: boolean }) => {
       setAutomations(prev => prev.map(a => a.id === data.id ? { ...a, active: data.active } : a))
     }
+    // Edits don't auto-restart the routine — the in-memory event keeps the
+    // old endTime/isManual flags. Tell the user to re-run so the new schedule
+    // takes effect; offer a one-click action so they don't have to hunt.
+    const onEditedWhileRunning = (data: { id: string; name: string }) => {
+      setToast({
+        message: `"${data.name}" is running with the previous schedule. Re-run to apply changes.`,
+        type: 'warning',
+        action: {
+          label: 'Re-run',
+          onClick: () => triggerAutomation(data.id)
+        }
+      })
+    }
     socket.on('automation:state-change', onStateChange)
-    return () => { socket.off('automation:state-change', onStateChange) }
+    socket.on('automation:edited-while-running', onEditedWhileRunning)
+    return () => {
+      socket.off('automation:state-change', onStateChange)
+      socket.off('automation:edited-while-running', onEditedWhileRunning)
+    }
   }, [socket])
 
   const fetchAutomations = async () => {
@@ -422,6 +441,15 @@ export default function Automations() {
           }}
           groups={groups}
           lights={lights}
+        />
+      )}
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          action={toast.action}
+          onClose={() => setToast(null)}
         />
       )}
         </div>
