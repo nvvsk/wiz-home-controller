@@ -831,14 +831,19 @@ class AutomationEngine extends EventEmitter {
         const endTime = this.getRoutineEndTime(automation);
         this.startAutomationEvents(automation, endTime, false);
       } else if (!shouldBeRunning && isRunning) {
-        // Don't kill manually-triggered routines; let them complete naturally.
-        // (Any one running step's isManual flag stands for the routine.)
+        // Enforce steps must honor the schedule's end even when manually
+        // triggered — otherwise a tapped-Play enforce sits in RUNNING forever
+        // (enforce steps have no self-timer; only the scheduler can close them).
+        // Duration-based manual runs are still allowed to complete naturally.
         const prefix = `${automation.id}::`;
+        let hasEnforce = false;
         let hasManual = false;
         for (const [key, event] of this.runningEvents) {
-          if (key.startsWith(prefix) && event.isManual) { hasManual = true; break; }
+          if (!key.startsWith(prefix)) continue;
+          if (event.enforce) hasEnforce = true;
+          if (event.isManual) hasManual = true;
         }
-        if (!hasManual) {
+        if (hasEnforce || !hasManual) {
           this.stopAutomation(automation.id, 'schedule ended');
         }
       }
