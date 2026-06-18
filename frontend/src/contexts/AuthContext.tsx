@@ -1,137 +1,96 @@
-import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+
+export interface AuthUser {
+  sub: string
+  name: string | null
+  email: string | null
+  username: string | null
+  groups: string[]
+}
 
 interface AuthValue {
   loading: boolean
   authRequired: boolean
   authenticated: boolean
-  token: string | null
-  loginError: string | null
-  login: (password: string) => Promise<boolean>
+  user: AuthUser | null
+  login: () => void
+  logout: () => void
 }
 
-const STORAGE_KEY = 'wiz.auth.token'
 const AuthContext = createContext<AuthValue | null>(null)
 
-function decodeExp(token: string): number | null {
-  try {
-    const body = token.split('.')[1]
-    const padded = body.replace(/-/g, '+').replace(/_/g, '/')
-    const json = JSON.parse(atob(padded + '==='.slice((padded.length + 3) % 4)))
-    return typeof json.exp === 'number' ? json.exp * 1000 : null
-  } catch {
-    return null
-  }
-}
-
+/**
+ * BFF auth model: login state lives in a server-side session (HTTP-only cookie).
+ * The browser never sees a token. We only ask the server `am I logged in?` and
+ * trigger redirects to `/api/auth/login` / `/api/auth/logout` to start/end the
+ * OIDC flow.
+ *
+ * A global fetch interceptor still maps a 401 on any /api/* call to "session
+ * gone — show the login screen," so background API failures during a long-idle
+ * tab don't leave the UI stuck.
+ */
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true)
   const [authRequired, setAuthRequired] = useState(true)
   const [authenticated, setAuthenticated] = useState(false)
-  const [token, setTokenState] = useState<string | null>(null)
-  const [loginError, setLoginError] = useState<string | null>(null)
-  const expiryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [user, setUser] = useState<AuthUser | null>(null)
 
-  const clearToken = () => {
-    localStorage.removeItem(STORAGE_KEY)
-    setTokenState(null)
-    setAuthenticated(false)
-    if (expiryTimer.current) { clearTimeout(expiryTimer.current); expiryTimer.current = null }
-  }
-
-  const setToken = (t: string) => {
-    localStorage.setItem(STORAGE_KEY, t)
-    setTokenState(t)
-    setAuthenticated(true)
-    // Schedule proactive logout when the token expires.
-    if (expiryTimer.current) clearTimeout(expiryTimer.current)
-    const expMs = decodeExp(t)
-    if (expMs) {
-      const delay = Math.max(0, expMs - Date.now())
-      expiryTimer.current = setTimeout(clearToken, delay)
-    }
-  }
-
-  // Initial bootstrap: ask /api/auth/status whether auth is required and
-  // whether our stored token (if any) is still valid.
   useEffect(() => {
-    // Globally inject the bearer token on every /api/* fetch and route 401s
-    // to clearToken(). Saves us from rewriting every call site — Scenes.tsx,
-    // Automations.tsx etc. all use raw fetch().
+    // Intercept all /api/* fetches so a 401 anywhere flips us back to logged out.
     const originalFetch = window.fetch.bind(window)
     window.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : (input as Request).url)
       const isApi = url.includes('/api/') || url.endsWith('/api')
       const isAuthEp = url.includes('/api/auth/')
-      if (isApi && !isAuthEp) {
-        const t = localStorage.getItem(STORAGE_KEY)
-        if (t) {
-          const headers = new Headers(init.headers || {})
-          if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${t}`)
-          init = { ...init, headers }
-        }
-      }
       const res = await originalFetch(input, init)
       if (res.status === 401 && isApi && !isAuthEp) {
-        ;(window as any).__wizOnUnauthorized?.()
+        setAuthenticated(false)
+        setUser(null)
       }
       return res
     }
-    ;(window as any).__wizOnUnauthorized = () => clearToken()
 
-    const saved = localStorage.getItem(STORAGE_KEY)
-    originalFetch('/api/auth/status', {
-      headers: saved ? { Authorization: `Bearer ${saved}` } : {}
-    })
+    fetch('/api/auth/status', { credentials: 'same-origin' })
       .then(r => r.json())
       .then(data => {
         setAuthRequired(!!data.authRequired)
         if (!data.authRequired) {
-          // Backend has auth off → don't gate anything.
           setAuthenticated(true)
-        } else if (data.authenticated && saved) {
-          setToken(saved)
+          setUser(null)
+        } else if (data.authenticated && data.user) {
+          setAuthenticated(true)
+          setUser(data.user)
         } else {
-          clearToken()
+          setAuthenticated(false)
+          setUser(null)
         }
       })
       .catch(() => {
-        // Server unreachable; assume auth is required and we're not in.
         setAuthRequired(true)
-        clearToken()
+        setAuthenticated(false)
+        setUser(null)
       })
       .finally(() => setLoading(false))
 
-    return () => {
-      window.fetch = originalFetch
-      delete (window as any).__wizOnUnauthorized
-    }
+    return () => { window.fetch = originalFetch }
   }, [])
 
-  const login = async (password: string): Promise<boolean> => {
-    setLoginError(null)
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        setLoginError(body.error || `Login failed (${res.status})`)
-        return false
-      }
-      const data = await res.json()
-      if (data.token) setToken(data.token)
-      else setAuthenticated(true) // auth disabled server-side
-      return true
-    } catch (err: any) {
-      setLoginError(err?.message || 'Network error')
-      return false
-    }
+  // Login is a full browser navigation — we cannot do OIDC redirects via fetch.
+  // returnTo preserves the page the user was on so the callback can drop them
+  // back where they started.
+  const login = () => {
+    const returnTo = window.location.pathname + window.location.search
+    window.location.href = `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`
+  }
+
+  // Logout likewise — backend destroys session, then redirects through
+  // Authentik's end_session endpoint if available, then back to '/'.
+  const logout = () => {
+    window.location.href = '/api/auth/logout'
   }
 
   return (
-    <AuthContext.Provider value={{ loading, authRequired, authenticated, token, loginError, login }}>
+    <AuthContext.Provider value={{ loading, authRequired, authenticated, user, login, logout }}>
       {children}
     </AuthContext.Provider>
   )
@@ -141,16 +100,4 @@ export const useAuth = () => {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error('useAuth outside AuthProvider')
   return ctx
-}
-
-// Helper for non-React modules (api.ts, socket.tsx) to read the current token.
-export function getAuthToken(): string | null {
-  return localStorage.getItem(STORAGE_KEY)
-}
-
-// Helper for non-React modules to signal "we got a 401" so the context can
-// clear state. Set by AuthProvider on mount.
-export function notifyUnauthorized() {
-  const fn = (window as any).__wizOnUnauthorized
-  if (typeof fn === 'function') fn()
 }

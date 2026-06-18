@@ -26,6 +26,8 @@ coverage/
 
 # Config — treat as local/runtime
 config/*.json
+config/sessions.db
+config/sessions.db-journal
 
 # Markdown — ignore ad-hoc notes; keep curated docs explicitly
 *.md

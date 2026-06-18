@@ -3,6 +3,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
+const session = require('express-session');
+const SQLiteStore = require('connect-sqlite3')(session);
 const logger = require('./logger');
 const WizDiscovery = require('./discovery');
 const PushManager = require('./pushManager');
@@ -16,24 +19,52 @@ const { requireAuth } = require('./middleware/auth');
 class WizServer {
   constructor(port = 3000) {
     this.port = port;
-    // Auth module reads WIZ_PASSWORD and (re)generates token secret as needed.
-    // Safe to call before any routes; init only sets up internal state.
-    auth.init();
     this.app = express();
     this.server = http.createServer(this.app);
+
+    // Single session middleware shared by Express and socket.io so the same
+    // cookie authenticates both HTTP requests and WebSocket connections.
+    // Session secret: env var preferred; a per-process random fallback keeps
+    // dev runs working but invalidates sessions across restarts.
+    const sessionSecret = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+    if (!process.env.SESSION_SECRET) {
+      logger.warn('auth: SESSION_SECRET not set — using ephemeral secret. Sessions will reset on restart.');
+    }
+    this.sessionMiddleware = session({
+      store: new SQLiteStore({
+        db: 'sessions.db',
+        dir: path.join(__dirname, '..', 'config'),
+      }),
+      name: 'wiz.sid',
+      secret: sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.SESSION_COOKIE_SECURE === '1',
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      },
+    });
+
     this.io = new Server(this.server, {
       cors: {
-        origin: '*',
+        origin: true,
+        credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE']
       }
     });
 
-    // Reject WebSocket connections without a valid token (no-op when auth
-    // is disabled). Frontend passes the token via socket.io's handshake.auth.
+    // Share the session middleware with socket.io so socket.request.session
+    // is populated on every handshake (works for both polling and websocket).
+    this.io.engine.use(this.sessionMiddleware);
+
+    // Reject WebSocket connections that don't have an authenticated session.
+    // No-op when auth is disabled.
     this.io.use((socket, next) => {
       if (!auth.isEnabled()) return next();
-      const token = socket.handshake?.auth?.token;
-      if (!auth.verifyToken(token)) return next(new Error('Unauthorized'));
+      const userSession = socket.request?.session?.user;
+      if (!userSession) return next(new Error('Unauthorized'));
       next();
     });
     
@@ -60,8 +91,14 @@ class WizServer {
   }
 
   setupMiddleware() {
-    this.app.use(cors());
+    // Behind nginx / Authentik proxies, trust X-Forwarded-* so secure cookies
+    // and req.ip work correctly. Disabled by default for direct LAN use.
+    if (process.env.SESSION_TRUST_PROXY === '1') {
+      this.app.set('trust proxy', 1);
+    }
+    this.app.use(cors({ origin: true, credentials: true }));
     this.app.use(express.json());
+    this.app.use(this.sessionMiddleware);
 
     this.app.use((req, res, next) => {
       logger.verbose(`${req.method} ${req.path}`);
@@ -182,6 +219,10 @@ class WizServer {
   }
 
   async start() {
+    // OIDC discovery is async — must complete before we accept any HTTP or
+    // WebSocket traffic that the auth middleware will gate.
+    await auth.init();
+
     await this.lightManager.loadConfig();
     await this.groupManager.loadConfig();
     

@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { LightUpdate, Device } from '../types'
-import { getAuthToken, notifyUnauthorized } from '../contexts/AuthContext'
 
 interface SocketContextType {
   socket: Socket | null
@@ -17,14 +16,20 @@ export const SocketProvider = ({ children }: { children: ReactNode }) => {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    // Pass the auth token in the handshake. Server's io.use middleware
-    // rejects unauthorized connections; we map that error to a logout.
-    const newSocket = io({ auth: { token: getAuthToken() } })
+    // No explicit auth in the handshake — the session cookie travels with
+    // the websocket upgrade (and polling fallback) just like any HTTP request.
+    // Server-side io.engine.use(sessionMiddleware) makes the session available
+    // to the connection middleware.
+    const newSocket = io({ withCredentials: true })
 
     newSocket.on('connect', () => setConnected(true))
     newSocket.on('disconnect', () => setConnected(false))
     newSocket.on('connect_error', (err) => {
-      if (err.message === 'Unauthorized') notifyUnauthorized()
+      if (err.message === 'Unauthorized') {
+        // Session is gone — reload so AuthProvider re-reads /api/auth/status
+        // and renders the login screen.
+        window.location.reload()
+      }
     })
 
     setSocket(newSocket)

@@ -30,8 +30,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "connect-sqlite3": "^0.9.16",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "openid-client": "^5.7.1",
     "socket.io": "^4.8.3",
     "suncalc": "^1.9.0"
   }

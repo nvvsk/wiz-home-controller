@@ -1,20 +1,12 @@
 import { Light, Device, DeviceStats } from '../types'
-import { getAuthToken, notifyUnauthorized } from '../contexts/AuthContext'
 
 const API_URL = '/api'
 
-// Single wrapper that attaches Authorization to every API call and bubbles
-// up 401 to the auth context (which clears state and shows the login screen).
-async function authedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const token = getAuthToken()
-  const headers = new Headers(init.headers || {})
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-  const res = await fetch(input, { ...init, headers })
-  if (res.status === 401) {
-    notifyUnauthorized()
-  }
-  return res
-}
+// Same-origin fetches automatically include the session cookie; no per-call
+// auth wrapping needed. The AuthContext-installed global fetch interceptor
+// handles 401s by flipping the UI back to the login screen.
+const authedFetch = (input: RequestInfo | URL, init: RequestInit = {}) =>
+  fetch(input, { credentials: 'same-origin', ...init })
 
 export const api = {
   // Lights

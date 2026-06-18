@@ -1,23 +1,19 @@
 const auth = require('../auth');
 
 /**
- * Express middleware that requires a valid bearer token on /api/* routes.
- * Allows through `/api/health` and `/api/auth/*` so the login screen and
- * health check can still reach the server.
+ * Express middleware that requires an authenticated session on /api/* routes.
+ * Allows /api/health and /api/auth/* through so the login flow can run.
  */
 function requireAuth(req, res, next) {
-  if (!auth.isEnabled()) return next();              // auth disabled in config
+  if (!auth.isEnabled()) return next();
   if (req.path === '/health') return next();
   if (req.path.startsWith('/auth/')) return next();
 
-  const header = req.get('authorization') || '';
-  const m = header.match(/^Bearer\s+(.+)$/i);
-  const token = m ? m[1] : null;
-  const payload = auth.verifyToken(token);
-  if (!payload) {
+  const user = req.session?.user;
+  if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  req.auth = payload;
+  req.auth = user;
   next();
 }
 

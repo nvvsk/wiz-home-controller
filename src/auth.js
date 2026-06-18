@@ -1,114 +1,149 @@
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
+const { Issuer, generators } = require('openid-client');
 const logger = require('./logger');
-const { safeWriteJsonSync } = require('./utils/safeWrite');
 
 /**
- * Tiny auth module — single-user, HMAC-signed bearer tokens, no extra deps.
+ * OIDC client setup (BFF pattern).
  *
- * Design:
- *  - Password is provided via the WIZ_PASSWORD env var.
- *    Without it, auth is disabled and the server logs a warning.
- *  - Tokens are HMAC-SHA256-signed (JWT-style: header.payload.signature).
- *  - The signing secret is persisted in config/auth.json so tokens survive
- *    restarts. The secret is generated on first run if missing.
- *  - Password verification uses scrypt with a per-process random salt
- *    (since there's only one password we keep it in memory).
+ * The express server is both the OIDC client and the API host. Browsers never
+ * see tokens — login state lives in a server-side session keyed by an HTTP-only
+ * cookie. See src/routes/auth.js for the redirect / callback / logout endpoints
+ * and src/middleware/auth.js for the per-request session check.
  *
- * Replace this whole module with a real auth service later — it's deliberately
- * isolated for that reason.
+ * Auth is ENABLED when all required OIDC_* env vars are set. If any are missing,
+ * the server runs unauthenticated (same fail-open behavior as the prior password
+ * mode), so dev environments work without configuration.
  */
 
-const CONFIG_PATH = path.join(__dirname, '..', 'config', 'auth.json');
-const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;          // 7 days
-const SCRYPT_KEYLEN = 64;
-
-let tokenSecret = null;
-let passwordHash = null;   // Buffer
-let passwordSalt = null;   // Buffer
+let oidcClient = null;
+let issuer = null;
 let authEnabled = false;
+let initPromise = null;
 
-function b64url(buf) {
-  return Buffer.from(buf).toString('base64')
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+function readConfig() {
+  return {
+    issuerUrl:        process.env.OIDC_ISSUER_URL,
+    clientId:         process.env.OIDC_CLIENT_ID,
+    clientSecret:     process.env.OIDC_CLIENT_SECRET,
+    redirectUri:      process.env.OIDC_REDIRECT_URI,
+    postLogoutUri:    process.env.OIDC_POST_LOGOUT_REDIRECT_URI,
+    scope:            process.env.OIDC_SCOPE || 'openid profile email',
+  };
 }
 
-function b64urlDecode(str) {
-  const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
-  return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
+function configIsComplete(cfg) {
+  return Boolean(cfg.issuerUrl && cfg.clientId && cfg.clientSecret && cfg.redirectUri);
 }
 
-function loadOrCreateSecret() {
-  try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      const data = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-      if (data.tokenSecret && typeof data.tokenSecret === 'string') {
-        return Buffer.from(data.tokenSecret, 'hex');
-      }
+async function init() {
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    const cfg = readConfig();
+    if (!configIsComplete(cfg)) {
+      authEnabled = false;
+      logger.warn('auth: OIDC env vars not fully set — authentication DISABLED. Set OIDC_ISSUER_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_REDIRECT_URI to enable.');
+      return;
     }
-  } catch (e) {
-    logger.warn(`auth: failed to read ${CONFIG_PATH}, regenerating: ${e.message}`);
-  }
-  const fresh = crypto.randomBytes(32);
-  safeWriteJsonSync(CONFIG_PATH, { tokenSecret: fresh.toString('hex') });
-  logger.info('auth: generated new token secret (config/auth.json)');
-  return fresh;
-}
-
-function init() {
-  const pw = process.env.WIZ_PASSWORD;
-  if (!pw || !pw.trim()) {
-    authEnabled = false;
-    logger.warn('auth: WIZ_PASSWORD not set — authentication DISABLED. Set it via env var or pm2 ecosystem to require login.');
-    return;
-  }
-  tokenSecret = loadOrCreateSecret();
-  passwordSalt = crypto.randomBytes(16);
-  passwordHash = crypto.scryptSync(pw, passwordSalt, SCRYPT_KEYLEN);
-  authEnabled = true;
-  logger.info('auth: enabled (single-user, 7-day token expiry)');
+    try {
+      issuer = await Issuer.discover(cfg.issuerUrl);
+      oidcClient = new issuer.Client({
+        client_id: cfg.clientId,
+        client_secret: cfg.clientSecret,
+        redirect_uris: [cfg.redirectUri],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'client_secret_basic',
+      });
+      authEnabled = true;
+      logger.info(`auth: OIDC enabled — issuer=${issuer.issuer}`);
+    } catch (err) {
+      authEnabled = false;
+      logger.error(`auth: OIDC discovery failed (${cfg.issuerUrl}): ${err.message}`);
+      logger.error('auth: server starting with authentication DISABLED.');
+    }
+  })();
+  return initPromise;
 }
 
 function isEnabled() { return authEnabled; }
 
-function verifyPassword(input) {
-  if (!authEnabled) return true;
-  if (typeof input !== 'string') return false;
-  try {
-    const candidate = crypto.scryptSync(input, passwordSalt, SCRYPT_KEYLEN);
-    return crypto.timingSafeEqual(candidate, passwordHash);
-  } catch {
-    return false;
-  }
+function getClient() {
+  if (!authEnabled) throw new Error('OIDC client not initialized');
+  return oidcClient;
 }
 
-function signToken(payload = {}) {
-  const now = Math.floor(Date.now() / 1000);
-  const body = { sub: 'user', iat: now, exp: now + TOKEN_TTL_SECONDS, ...payload };
-  const headerB64 = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const bodyB64 = b64url(JSON.stringify(body));
-  const signing = `${headerB64}.${bodyB64}`;
-  const sig = crypto.createHmac('sha256', tokenSecret).update(signing).digest();
-  return `${signing}.${b64url(sig)}`;
+function getIssuer() {
+  if (!authEnabled) throw new Error('OIDC issuer not initialized');
+  return issuer;
 }
 
-function verifyToken(token) {
-  if (!authEnabled) return { sub: 'auth-disabled', exp: Number.MAX_SAFE_INTEGER };
-  if (typeof token !== 'string') return null;
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const [headerB64, bodyB64, sigB64] = parts;
-  const signing = `${headerB64}.${bodyB64}`;
-  const expected = crypto.createHmac('sha256', tokenSecret).update(signing).digest();
-  const given = b64urlDecode(sigB64);
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
-  let body;
-  try { body = JSON.parse(b64urlDecode(bodyB64).toString('utf8')); } catch { return null; }
-  if (!body.exp || body.exp < Math.floor(Date.now() / 1000)) return null;
-  return body;
+function getScope() {
+  return readConfig().scope;
 }
 
-function getTokenTtl() { return TOKEN_TTL_SECONDS; }
+/**
+ * Build the URL we redirect the browser to so the user can authenticate.
+ * Caller must persist the returned code_verifier / state / nonce in the user's
+ * session and pass them back in handleCallback().
+ */
+function buildAuthUrl() {
+  const code_verifier = generators.codeVerifier();
+  const code_challenge = generators.codeChallenge(code_verifier);
+  const state = generators.state();
+  const nonce = generators.nonce();
+  const url = oidcClient.authorizationUrl({
+    scope: getScope(),
+    code_challenge,
+    code_challenge_method: 'S256',
+    state,
+    nonce,
+  });
+  return { url, code_verifier, state, nonce };
+}
 
-module.exports = { init, isEnabled, verifyPassword, signToken, verifyToken, getTokenTtl };
+/**
+ * Exchange the authorization code for tokens, verify everything, and return
+ * the normalized user object we store in the session.
+ *
+ * `params` is what `oidcClient.callbackParams(req)` returned — i.e. the query
+ * string from the callback URL.
+ */
+async function handleCallback(params, expected) {
+  const cfg = readConfig();
+  const tokenSet = await oidcClient.callback(cfg.redirectUri, params, {
+    code_verifier: expected.code_verifier,
+    state: expected.state,
+    nonce: expected.nonce,
+  });
+  const claims = tokenSet.claims();
+  return {
+    sub: claims.sub,
+    email: claims.email || null,
+    name: claims.name || null,
+    preferred_username: claims.preferred_username || null,
+    groups: Array.isArray(claims.groups) ? claims.groups : [],
+    id_token: tokenSet.id_token,           // needed for federated logout
+    issued_at: Math.floor(Date.now() / 1000),
+  };
+}
+
+function hasLogoutEndpoint() {
+  return Boolean(authEnabled && issuer?.metadata?.end_session_endpoint);
+}
+
+function buildLogoutUrl(idToken) {
+  const cfg = readConfig();
+  return oidcClient.endSessionUrl({
+    id_token_hint: idToken,
+    post_logout_redirect_uri: cfg.postLogoutUri || cfg.redirectUri.replace(/\/api\/auth\/callback$/, '/'),
+  });
+}
+
+module.exports = {
+  init,
+  isEnabled,
+  getClient,
+  getIssuer,
+  buildAuthUrl,
+  handleCallback,
+  hasLogoutEndpoint,
+  buildLogoutUrl,
+};
